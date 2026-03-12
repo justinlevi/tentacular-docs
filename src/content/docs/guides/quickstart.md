@@ -8,9 +8,9 @@ description: Get up and running with Tentacular in minutes
 - **Kubernetes cluster** — any distribution (EKS, GKE, AKS, k0s, k3s, kind)
 - **kubectl** — configured to access your cluster
 - **Docker** — for building tentacle images
-- **Node.js 20+** — for local development
 - **Deno 2.x** — for running the engine locally
 - **Go 1.22+** — if building `tntc` from source
+- **Helm** — for installing the MCP server
 
 ## Install the CLI
 
@@ -21,8 +21,8 @@ curl -fsSL https://raw.githubusercontent.com/randybias/tentacular/main/install.s
 # Option 2: Build from source
 git clone https://github.com/randybias/tentacular.git
 cd tentacular
-go build -o tntc ./cmd/tntc
-install tntc ~/.local/bin/
+make install   # builds and installs to ~/.local/bin/
+tntc version   # verify
 ```
 
 :::note
@@ -32,26 +32,86 @@ Make sure `~/.local/bin` is on your `PATH`. You can add it by appending
 
 ## Install the MCP Server
 
-The MCP server is the control plane for managing tentacles in your cluster. Install it via Helm:
+The MCP server is the in-cluster control plane. All CLI commands that interact with the cluster route through it.
 
 ```bash
-helm install tentacular-mcp oci://ghcr.io/randybias/tentacular-mcp \
-  --namespace tentacular-system \
-  --create-namespace
+# Clone the MCP server repo
+git clone git@github.com:randybias/tentacular-mcp.git
+
+# Create the support namespace (used by the esm.sh module proxy)
+kubectl create namespace tentacular-support
+
+# Generate an auth token and install via Helm
+TOKEN=$(openssl rand -hex 32)
+helm install tentacular-mcp ./tentacular-mcp/charts/tentacular-mcp \
+  --namespace tentacular-system --create-namespace \
+  --set auth.token="${TOKEN}"
+```
+
+Save the token for CLI configuration:
+
+```bash
+mkdir -p ~/.tentacular
+kubectl get secret tentacular-mcp-auth -n tentacular-system \
+  -o jsonpath='{.data.token}' | base64 -d > ~/.tentacular/mcp-token
+```
+
+### Accessing the MCP server
+
+On **kind** or other local clusters, port-forward the MCP service:
+
+```bash
+kubectl port-forward -n tentacular-system svc/tentacular-mcp 8080:8080 &
+```
+
+The MCP endpoint will be `http://localhost:8080/mcp`.
+
+On **cloud clusters** (EKS, GKE, AKS), expose the service via a LoadBalancer or ingress and use that URL as your endpoint.
+
+Verify the server is healthy:
+
+```bash
+curl http://localhost:8080/healthz
+# {"status":"ok"}
 ```
 
 ## Configure the CLI
 
 ```bash
-# Set up your environment
-tntc configure --registry ghcr.io/yourorg --namespace tentacular-dev --project
-
-# Verify cluster connectivity
-tntc cluster check
-
-# Generate a cluster profile (helps agents design tentacles)
-tntc cluster profile --save
+tntc configure \
+  --registry <your-registry> \
+  --default-namespace <your-namespace> \
+  --project
 ```
+
+This writes project-level defaults to `.tentacular/config.yaml`.
+
+Next, add the MCP endpoint and token to your config. Open `.tentacular/config.yaml` and add `mcp_endpoint` and `mcp_token_path` to your environment:
+
+```yaml
+# .tentacular/config.yaml
+registry: <your-registry>
+namespace: <your-namespace>
+runtime_class: gvisor
+default_env: dev
+
+environments:
+  dev:
+    namespace: <your-namespace>
+    mcp_endpoint: http://localhost:8080/mcp
+    mcp_token_path: ~/.tentacular/mcp-token
+```
+
+Verify cluster connectivity:
+
+```bash
+tntc cluster check --env dev
+```
+
+:::note
+`tntc configure` automatically generates a cluster profile on first run.
+You can regenerate it later with `tntc cluster profile --env dev --save`.
+:::
 
 ## Create Your First Tentacle
 
@@ -123,9 +183,6 @@ tntc list
 
 # Check health
 tntc status my-first-tentacle --detail
-
-# Security audit
-tntc audit my-first-tentacle
 ```
 
 ## Clean Up
