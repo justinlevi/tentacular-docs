@@ -58,15 +58,25 @@ kubectl get secret tentacular-mcp-auth -n tentacular-system \
 
 ### Accessing the MCP server
 
-On **kind** or other local clusters, port-forward the MCP service:
+The CLI connects to the MCP server over HTTP. How you expose it depends on your cluster:
+
+**kind / local clusters** — use port-forwarding (kind doesn't expose NodePorts to the host by default):
 
 ```bash
 kubectl port-forward -n tentacular-system svc/tentacular-mcp 8080:8080 &
+# MCP endpoint: http://localhost:8080/mcp
 ```
 
-The MCP endpoint will be `http://localhost:8080/mcp`.
+**Cloud clusters (EKS, GKE, AKS)** — use NodePort or LoadBalancer:
 
-On **cloud clusters** (EKS, GKE, AKS), expose the service via a LoadBalancer or ingress and use that URL as your endpoint.
+```bash
+helm upgrade tentacular-mcp ./tentacular-mcp/charts/tentacular-mcp \
+  --namespace tentacular-system \
+  --reuse-values \
+  --set service.type=NodePort \
+  --set service.nodePort=30080
+# MCP endpoint: http://<node-ip>:30080/mcp
+```
 
 Verify the server is healthy:
 
